@@ -28,15 +28,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RCLONE_LOG_FILE = "rclone-sync.log"
 SCRIPT_LOG_FILE = "backup-to-r2.log"
-RETENTION_DAYS = 7  # keep N daily SQLite backups per DB file
+RETENTION_DAYS = 7
 LOCK_FILE = "/tmp/backup-to-r2.lock"
 
-# Safe SQLite backup via sqlite3 CLI tool (consistent snapshot)
-SQLITE_BACKUP_CMD = 'sqlite3 {src!r} ".backup {dst!r}"'
-# Alternative: use --safe (2.47+) if available for even safer backups.
-# For WAL mode databases, the .backup command first checkpoints the WAL.
-
-# rclone sync mode -- change to "copy" if you want additive-only sync
+# Change to "copy" to keep extra files on remote
 RCLONE_MODE = "sync"
 
 
@@ -63,7 +58,7 @@ def acquire_lock() -> int:
     lock_fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except IOError:
+    except OSError:
         os.close(lock_fd)
         print(f"Another instance is already running (lock: {LOCK_FILE})")
         sys.exit(1)
@@ -104,18 +99,18 @@ def backup_sqlite_file(db_path: Path, logger: logging.Logger):
     Skips if today's backup already exists (idempotent).
     Returns Path if successful, None on failure.
     """
+    stem = db_path.stem
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
-    backup_name = f"db-{today}.sqlite"
+    backup_name = f"{stem}-{today}.sqlite"
     backup_path = db_path.parent / backup_name
 
     if backup_path.exists():
         logger.info("  └─ Backup already exists for today, skipping: %s", backup_path)
         return backup_path
 
-    # Write to temp file in the same directory (same filesystem for atomic rename)
     tmp_fd, tmp_path_str = tempfile.mkstemp(
         dir=str(db_path.parent),
-        prefix=f".db-{today}.tmp.",
+        prefix=f".{stem}-{today}.tmp.",
     )
     os.close(tmp_fd)
     tmp_path = Path(tmp_path_str)
@@ -123,11 +118,7 @@ def backup_sqlite_file(db_path: Path, logger: logging.Logger):
     try:
         cmd = f'sqlite3 {str(db_path)!r} ".backup {str(tmp_path)!r}"'
         result = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 min per DB
+            cmd, shell=True, capture_output=True, text=True, timeout=300, check=False
         )
         if result.returncode != 0:
             logger.error(
@@ -136,7 +127,6 @@ def backup_sqlite_file(db_path: Path, logger: logging.Logger):
             tmp_path.unlink(missing_ok=True)
             return None
 
-        # Atomic rename: this is instant and crash-safe
         tmp_path.rename(backup_path)
         logger.info("  └─ Backed up → %s", backup_path)
         return backup_path
@@ -155,7 +145,8 @@ def cleanup_old_backups(db_path: Path, logger: logging.Logger) -> None:
     """Remove backups older than RETENTION_DAYS for this database."""
     cutoff = datetime.now(timezone.utc).timestamp() - RETENTION_DAYS * 86400
     removed = 0
-    for backup in db_path.parent.glob("db-????????.sqlite"):
+    stem = db_path.stem
+    for backup in db_path.parent.glob(f"{stem}-????????.sqlite"):
         try:
             if backup.stat().st_mtime < cutoff:
                 backup.unlink()
@@ -189,13 +180,12 @@ def run_rclone_sync(
         "INFO",
     ]
 
-    # Truncate the rclone log so each run starts fresh (rclone --log-file appends)
     log_file.write_text("")
 
     logger.info("rclone %s %s → %s", RCLONE_MODE, src_dir, bucket)
     logger.info("  rclone log: %s", log_file)
 
-    result = subprocess.run(cmd, capture_output=False, text=True)
+    result = subprocess.run(cmd, capture_output=False, text=True, check=False)
 
     if result.returncode == 0:
         logger.info("rclone sync completed successfully")
@@ -239,14 +229,11 @@ def main() -> None:
     rclone_log = SCRIPT_DIR / RCLONE_LOG_FILE
     script_log = SCRIPT_DIR / SCRIPT_LOG_FILE
 
-    # Logging must be set up before we log anything
     logger = setup_logging(script_log)
 
-    # Prevent concurrent runs
     try:
         lock_fd = acquire_lock()
     except SystemExit:
-        # Another instance is running
         sys.exit(1)
 
     overall_ok = True
