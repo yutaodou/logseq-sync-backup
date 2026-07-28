@@ -71,10 +71,7 @@ Two log files are written next to the script, overwritten each run:
 
 ```bash
 # daily at 3 AM
-0 3 * * * /full/path/to/backup-to-r2.py /full/path/to/data r2:my-bucket
-
-# with explicit PATH (cron has a minimal one)
-0 3 * * * PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /full/path/to/backup-to-r2.py /full/path/to/data r2:my-bucket
+0 3 * * * /full/path/to/backup-to-r2.py /full/path/to/data r2:my-bucket/subfolder
 ```
 
 ## Configuration
