@@ -116,9 +116,9 @@ def backup_sqlite_file(db_path: Path, logger: logging.Logger):
     tmp_path = Path(tmp_path_str)
 
     try:
-        cmd = f'sqlite3 {str(db_path)!r} ".backup {str(tmp_path)!r}"'
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=300, check=False
+            ["sqlite3", str(db_path), ".backup", str(tmp_path)],
+            capture_output=True, text=True, timeout=300, check=False
         )
         if result.returncode != 0:
             logger.error(
