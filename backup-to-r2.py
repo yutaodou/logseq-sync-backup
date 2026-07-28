@@ -3,7 +3,8 @@
 Backup a directory to Cloudflare R2 with safe SQLite snapshot + rclone sync.
 
 Usage:
-    ./backup-to-r2.py /path/to/data my-r2-bucket:/path/prefix
+    ./backup-to-r2.py /path/to/data r2:my-bucket
+    ./backup-to-r2.py /path/to/data r2:my-bucket/sub/folder
 
 Safe SQLite backups use sqlite3's .backup command for consistent snapshots,
 even for databases under active write load (WAL/journal modes).
@@ -31,7 +32,7 @@ RETENTION_DAYS = 7  # keep N daily SQLite backups per DB file
 LOCK_FILE = "/tmp/backup-to-r2.lock"
 
 # Safe SQLite backup via sqlite3 CLI tool (consistent snapshot)
-SQLITE_BACKUP_CMD = "sqlite3 {src!r} \".backup {dst!r}\""
+SQLITE_BACKUP_CMD = 'sqlite3 {src!r} ".backup {dst!r}"'
 # Alternative: use --safe (2.47+) if available for even safer backups.
 # For WAL mode databases, the .backup command first checkpoints the WAL.
 
@@ -79,8 +80,12 @@ def check_prerequisites(logger: logging.Logger, src_dir: Path) -> None:
             logger.error("Required tool not found in PATH: %s", tool)
             sys.exit(1)
 
-    logger.info("Prerequisites OK: directory=%s, sqlite3=%s, rclone=%s",
-                src_dir, shutil.which("sqlite3"), shutil.which("rclone"))
+    logger.info(
+        "Prerequisites OK: directory=%s, sqlite3=%s, rclone=%s",
+        src_dir,
+        shutil.which("sqlite3"),
+        shutil.which("rclone"),
+    )
 
 
 def find_sqlite_files(src_dir: Path) -> list[Path]:
@@ -116,7 +121,7 @@ def backup_sqlite_file(db_path: Path, logger: logging.Logger):
     tmp_path = Path(tmp_path_str)
 
     try:
-        cmd = f"sqlite3 {str(db_path)!r} \".backup {str(tmp_path)!r}\""
+        cmd = f'sqlite3 {str(db_path)!r} ".backup {str(tmp_path)!r}"'
         result = subprocess.run(
             cmd,
             shell=True,
@@ -125,7 +130,9 @@ def backup_sqlite_file(db_path: Path, logger: logging.Logger):
             timeout=300,  # 5 min per DB
         )
         if result.returncode != 0:
-            logger.error("  └─ Backup FAILED for %s: %s", db_path, result.stderr.strip())
+            logger.error(
+                "  └─ Backup FAILED for %s: %s", db_path, result.stderr.strip()
+            )
             tmp_path.unlink(missing_ok=True)
             return None
 
@@ -156,7 +163,9 @@ def cleanup_old_backups(db_path: Path, logger: logging.Logger) -> None:
         except OSError:
             pass
     if removed:
-        logger.info("  └─ Cleaned up %d old backup(s) (>%d days)", removed, RETENTION_DAYS)
+        logger.info(
+            "  └─ Cleaned up %d old backup(s) (>%d days)", removed, RETENTION_DAYS
+        )
 
 
 def run_rclone_sync(
@@ -173,8 +182,11 @@ def run_rclone_sync(
         RCLONE_MODE,
         str(src_dir),
         bucket,
-        "--log-file", str(log_file),
-        "--log-level", "INFO",
+        "--fast-list",
+        "--log-file",
+        str(log_file),
+        "--log-level",
+        "INFO",
     ]
 
     # Truncate the rclone log so each run starts fresh (rclone --log-file appends)
@@ -199,11 +211,11 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  ./backup-to-r2.py /data/my-project my-r2-bucket:backups/my-project\n"
-            "  ./backup-to-r2.py /data/my-project my-r2-bucket:backups/my-project\n"
+            "  ./backup-to-r2.py /data/my-project r2:my-bucket\n"
+            "  ./backup-to-r2.py /data/my-project r2:my-bucket/sub/folder\n"
             "\n"
             "Crontab entry (daily at 3 AM):\n"
-            "  0 3 * * * /path/to/backup-to-r2.py /data/my-project my-r2-bucket:backups/my-project\n"
+            "  0 3 * * * /path/to/backup-to-r2.py /data/my-project r2:my-bucket\n"
         ),
     )
     parser.add_argument(
@@ -214,7 +226,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "bucket",
         type=str,
-        help="R2 bucket path (e.g. my-bucket:path/prefix)",
+        help="rclone destination (e.g. r2:my-bucket or r2:my-bucket/sub/folder)",
     )
     return parser.parse_args()
 
@@ -265,7 +277,8 @@ def main() -> None:
         if failures:
             logger.warning(
                 "SQLite backup finished with %d failure(s) out of %d database(s)",
-                failures, len(sqlite_files),
+                failures,
+                len(sqlite_files),
             )
         else:
             logger.info("All SQLite backups completed successfully")
