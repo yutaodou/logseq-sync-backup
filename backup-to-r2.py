@@ -17,6 +17,7 @@ import argparse
 import fcntl
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -83,11 +84,16 @@ def check_prerequisites(logger: logging.Logger, src_dir: Path) -> None:
     )
 
 
+_BACKUP_RE = re.compile(r"-\d{8}$")
+
+
 def find_sqlite_files(src_dir: Path) -> list[Path]:
-    """Recursively find all .sqlite, .sqlite3, .db files."""
+    """Recursively find all .sqlite, .sqlite3, .db files, skipping backups."""
     results: list[Path] = []
     for pattern in ("*.sqlite", "*.sqlite3", "*.db"):
-        results.extend(src_dir.rglob(pattern))
+        for path in src_dir.rglob(pattern):
+            if not _BACKUP_RE.search(path.stem):
+                results.append(path)
     return results
 
 
